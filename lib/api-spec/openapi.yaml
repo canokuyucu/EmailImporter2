@@ -1,0 +1,543 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: EIDS Yetki Takip API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: yetkiler
+    description: Yetki (authority) operations
+  - name: scanner
+    description: Email scanner operations
+  - name: logs
+    description: Activity log operations
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /health/connections:
+    get:
+      operationId: testConnections
+      tags: [health]
+      summary: Test Gmail and Telegram connections
+      responses:
+        "200":
+          description: Connection test results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectionTestResult"
+  /yetkiler:
+    get:
+      operationId: listYetkiler
+      tags: [yetkiler]
+      summary: List all authorities
+      parameters:
+        - name: durum
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: sortBy
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: sortOrder
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of authorities
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Yetki"
+    post:
+      operationId: createYetki
+      tags: [yetkiler]
+      summary: Manually create an authority record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateYetkiInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Yetki"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /yetkiler/stats:
+    get:
+      operationId: getYetkiStats
+      tags: [yetkiler]
+      summary: Get authority statistics
+      responses:
+        "200":
+          description: Statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/YetkiStats"
+  /yetkiler/export:
+    get:
+      operationId: exportYetkiler
+      tags: [yetkiler]
+      summary: Export authorities as CSV
+      responses:
+        "200":
+          description: CSV file
+          content:
+            text/csv:
+              schema:
+                type: string
+  /yetkiler/bulk-delete:
+    post:
+      operationId: bulkDeleteYetkiler
+      tags: [yetkiler]
+      summary: Bulk delete authorities
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkDeleteInput"
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+  /yetkiler/{id}:
+    get:
+      operationId: getYetki
+      tags: [yetkiler]
+      summary: Get a single authority with its activity log
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Authority with history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/YetkiDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      operationId: updateYetki
+      tags: [yetkiler]
+      summary: Update an authority record
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateYetkiInput"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Yetki"
+    delete:
+      operationId: deleteYetki
+      tags: [yetkiler]
+      summary: Delete an authority
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+  /yetkiler/{id}/notlar:
+    get:
+      operationId: listYetkiNotlari
+      tags: [yetkiler]
+      summary: List notes for an authority
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Notes list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/YetkiNot"
+    post:
+      operationId: createYetkiNot
+      tags: [yetkiler]
+      summary: Add a note to an authority
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateYetkiNotInput"
+      responses:
+        "201":
+          description: Created note
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/YetkiNot"
+  /notlar/{notId}:
+    delete:
+      operationId: deleteYetkiNot
+      tags: [yetkiler]
+      summary: Delete a note
+      parameters:
+        - name: notId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+  /yetkiler/takvim:
+    get:
+      operationId: getYetkiTakvim
+      tags: [yetkiler]
+      summary: Get calendar data grouped by expiry month
+      responses:
+        "200":
+          description: Calendar grouped data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TakvimAy"
+  /activity-logs:
+    get:
+      operationId: listActivityLogs
+      tags: [logs]
+      summary: List all activity logs
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Activity logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ActivityLog"
+  /scanner/run:
+    post:
+      operationId: runScanner
+      tags: [scanner]
+      summary: Manually trigger email scan
+      responses:
+        "200":
+          description: Scan result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanResult"
+  /scanner/status:
+    get:
+      operationId: getScannerStatus
+      tags: [scanner]
+      summary: Get scanner status
+      responses:
+        "200":
+          description: Scanner status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScannerStatus"
+  /scanner/send-reminder:
+    post:
+      operationId: sendReminder
+      tags: [scanner]
+      summary: Send Telegram reminder
+      responses:
+        "200":
+          description: Reminder sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+    ConnectionTestResult:
+      type: object
+      properties:
+        gmail:
+          type: object
+          properties:
+            ok:
+              type: boolean
+            message:
+              type: string
+          required: [ok, message]
+        telegram:
+          type: object
+          properties:
+            ok:
+              type: boolean
+            message:
+              type: string
+          required: [ok, message]
+      required: [gmail, telegram]
+    Yetki:
+      type: object
+      properties:
+        id:
+          type: integer
+        tasinmazNo:
+          type: string
+        ad:
+          type: string
+        bitisTarihi:
+          type: string
+          nullable: true
+        mailTarihi:
+          type: string
+        durum:
+          type: string
+        kalanGun:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required: [id, tasinmazNo, ad, bitisTarihi, mailTarihi, durum, kalanGun, createdAt, updatedAt]
+    YetkiDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+        tasinmazNo:
+          type: string
+        ad:
+          type: string
+        bitisTarihi:
+          type: string
+          nullable: true
+        mailTarihi:
+          type: string
+        durum:
+          type: string
+        kalanGun:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        logs:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActivityLog"
+      required: [id, tasinmazNo, ad, bitisTarihi, mailTarihi, durum, kalanGun, createdAt, updatedAt, logs]
+    CreateYetkiInput:
+      type: object
+      properties:
+        tasinmazNo:
+          type: string
+        ad:
+          type: string
+        bitisTarihi:
+          type: string
+          nullable: true
+        mailTarihi:
+          type: string
+      required: [tasinmazNo, ad, mailTarihi]
+    BulkDeleteInput:
+      type: object
+      properties:
+        ids:
+          type: array
+          items:
+            type: integer
+      required: [ids]
+    YetkiStats:
+      type: object
+      properties:
+        total:
+          type: integer
+        aktif:
+          type: integer
+        surebitti:
+          type: integer
+        iptal:
+          type: integer
+        yaklasanlar:
+          type: integer
+      required: [total, aktif, surebitti, iptal, yaklasanlar]
+    ActivityLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        tasinmazNo:
+          type: string
+          nullable: true
+        ad:
+          type: string
+          nullable: true
+        action:
+          type: string
+        details:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, tasinmazNo, ad, action, details, createdAt]
+    YetkiNot:
+      type: object
+      properties:
+        id:
+          type: integer
+        yetkiId:
+          type: integer
+        not:
+          type: string
+        createdAt:
+          type: string
+      required: [id, yetkiId, not, createdAt]
+    CreateYetkiNotInput:
+      type: object
+      properties:
+        not:
+          type: string
+      required: [not]
+    TakvimAy:
+      type: object
+      properties:
+        ay:
+          type: string
+        yil:
+          type: integer
+        ayNo:
+          type: integer
+        yetkiler:
+          type: array
+          items:
+            $ref: "#/components/schemas/Yetki"
+      required: [ay, yil, ayNo, yetkiler]
+    ScanResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        processed:
+          type: integer
+        newCount:
+          type: integer
+        updatedCount:
+          type: integer
+      required: [success, message, processed, newCount, updatedCount]
+    ScannerStatus:
+      type: object
+      properties:
+        lastScan:
+          type: string
+          nullable: true
+        nextScan:
+          type: string
+          nullable: true
+        isRunning:
+          type: boolean
+      required: [lastScan, nextScan, isRunning]
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required: [success, message]
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]

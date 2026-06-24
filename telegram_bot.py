@@ -1,0 +1,107 @@
+import imaplib, email, re, datetime, gspread, schedule, time, requests, os, threading
+import pyautogui
+import platform
+from email.utils import parsedate_to_datetime
+from google.oauth2.service_account import Credentials
+import telebot
+
+# --- AYARLAR ---
+EMAIL = os.environ.get("EMAIL", "okuyucuali@gmail.com")
+PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
+SHEET_NAME = "EIDS_YETKILER"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
+scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+
+# Google Sheets Bağlantısı
+sheet = None
+try:
+    creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+    client = gspread.authorize(creds)
+    sheet = client.open(SHEET_NAME).sheet1
+    print("✅ Google Sheets ve Sistem Kontrolü Aktif.")
+except Exception as e:
+    print(f"❌ Bağlantı Hatası: {e}")
+
+# --- SİSTEM KOMUTLARI ---
+
+@bot.message_handler(commands=['ss'])
+def ekran_goruntusu(message):
+    if str(message.chat.id) != TELEGRAM_CHAT_ID: return
+    try:
+        path = "screen.png"
+        pyautogui.screenshot(path)
+        with open(path, 'rb') as photo:
+            bot.send_photo(TELEGRAM_CHAT_ID, photo, caption=f"🖥 Ekran Görüntüsü\n⏰ {datetime.datetime.now().strftime('%H:%M:%S')}")
+        os.remove(path)
+    except Exception as e:
+        bot.send_message(TELEGRAM_CHAT_ID, f"❌ SS Hatası: {e}")
+
+@bot.message_handler(commands=['ping'])
+def ping_status(message):
+    if str(message.chat.id) != TELEGRAM_CHAT_ID: return
+    uptime = datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+    sys_info = f"🤖 <b>Bot Durumu:</b> Aktif\n💻 <b>Sistem:</b> {platform.system()}\n⏰ <b>Sunucu Saati:</b> {uptime}"
+    bot.send_message(TELEGRAM_CHAT_ID, sys_info, parse_mode="HTML")
+
+@bot.message_handler(commands=['kapat'])
+def pc_kapat(message):
+    if str(message.chat.id) != TELEGRAM_CHAT_ID: return
+    bot.send_message(TELEGRAM_CHAT_ID, "⚠️ Bilgisayar 60 saniye içinde KAPATILIYOR!")
+    os.system("shutdown /s /t 60")
+
+@bot.message_handler(commands=['iptal'])
+def pc_iptal(message):
+    if str(message.chat.id) != TELEGRAM_CHAT_ID: return
+    os.system("shutdown /a")
+    bot.send_message(TELEGRAM_CHAT_ID, "✅ Kapatma işlemi iptal edildi.")
+
+# --- EMLAK KOMUTLARI ---
+
+@bot.message_handler(commands=['liste'])
+def liste_gonder(message):
+    if str(message.chat.id) != TELEGRAM_CHAT_ID: return
+    if not sheet:
+        bot.send_message(TELEGRAM_CHAT_ID, "❌ Google Sheets bağlantısı yok.")
+        return
+    veriler = sheet.get_all_values()[1:]
+    for s in veriler:
+        bot.send_message(TELEGRAM_CHAT_ID, f"🟢 <b>{s[1]}</b>\n🔢 No: {s[0]}\n📅 Bitiş: {s[2]}", parse_mode="HTML")
+        time.sleep(0.2)
+
+@bot.message_handler(commands=['tara'])
+def manuel_tara(message):
+    if str(message.chat.id) != TELEGRAM_CHAT_ID: return
+    bot.send_message(TELEGRAM_CHAT_ID, "🔍 Gmail kontrol ediliyor...")
+
+@bot.message_handler(func=lambda m: True)
+def genel_sorgu(message):
+    if str(message.chat.id) != TELEGRAM_CHAT_ID: return
+    if not sheet:
+        bot.send_message(TELEGRAM_CHAT_ID, "❌ Google Sheets bağlantısı yok.")
+        return
+    metin = message.text.lower()
+    veriler = sheet.get_all_values()[1:]
+    bulunan = False
+    for s in veriler:
+        if metin in s[0].lower() or metin in s[1].lower():
+            bot.send_message(TELEGRAM_CHAT_ID, f"🏠 <b>Kayıt:</b> {s[1]}\n🔢 No: {s[0]}\n📅 Bitiş: {s[2]}", parse_mode="HTML")
+            bulunan = True
+    if not bulunan:
+        bot.send_message(TELEGRAM_CHAT_ID, "🤖 Anlayamadım Ali Can. Komutları görmek için /ping yazabilirsin.")
+
+# --- DÖNGÜ VE THREADING ---
+def run_polling():
+    bot.infinity_polling()
+
+def run_schedule():
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+if __name__ == "__main__":
+    print("🚀 Ayaz Emlak Full Kontrol Botu Başlatıldı!")
+    threading.Thread(target=run_schedule, daemon=True).start()
+    run_polling()

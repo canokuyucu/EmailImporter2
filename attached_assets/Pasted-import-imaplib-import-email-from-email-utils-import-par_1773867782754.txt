@@ -1,0 +1,176 @@
+import imaplib
+import email
+from email.utils import parsedate_to_datetime
+import re
+import datetime
+import gspread
+from google.oauth2.service_account import Credentials
+import schedule
+import time
+import requests
+import os
+
+# --- SECRET ENV ---
+EMAIL = os.getenv("EMAIL")
+PASSWORD = os.getenv("PASSWORD")
+SHEET_NAME = "EIDS_YETKILER"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# --- GOOGLE SHEETS ---
+scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+
+creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+client = gspread.authorize(creds)
+sheet = client.open(SHEET_NAME).sheet1
+
+# --- TELEGRAM ---
+def telegram_mesaj_gonder(mesaj):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mesaj, "parse_mode": "HTML"}
+    try:
+        requests.post(url, data=payload)
+    except Exception as e:
+        print(f"Telegram hatası: {e}")
+
+# --- DURUM ---
+def durum_hesapla(bitis):
+    if not bitis:
+        return "İPTAL"
+    try:
+        bitis_tarih = datetime.datetime.strptime(bitis, "%d.%m.%Y")
+        kalan_gun = (bitis_tarih - datetime.datetime.now()).days
+        if kalan_gun < 0:
+            return "SÜRE BİTTİ"
+        if 0 <= kalan_gun <= 7:
+            return f"{kalan_gun} GÜN KALDI"
+        return "AKTİF"
+    except:
+        return "HATA"
+
+def ikon_belirle(durum):
+    if "GÜN KALDI" in durum:
+        return "🟡"
+    if durum == "AKTİF":
+        return "🟢"
+    if durum == "İPTAL":
+        return "🔴"
+    return "⚪"
+
+# --- SHEET ---
+def tabloya_yaz_veya_guncelle(tasinmaz_no, ad, bitis, mail_tarih, durum):
+    tasinmaz_listesi = sheet.col_values(1)
+    if tasinmaz_no in tasinmaz_listesi:
+        satir = tasinmaz_listesi.index(tasinmaz_no) + 1
+        sheet.update(f'A{satir}:E{satir}', [[tasinmaz_no, ad, bitis, mail_tarih, durum]])
+        return "Güncellendi"
+    else:
+        sheet.append_row([tasinmaz_no, ad, bitis, mail_tarih, durum])
+        return "Yeni Eklendi"
+
+# --- LİSTE ---
+def hatirlatici_kontrol():
+    try:
+        veriler = sheet.get_all_values()[1:]
+        aktif_listesi = []
+        for satir in veriler:
+            if len(satir) >= 5:
+                ad, bitis = satir[1], satir[2]
+                guncel_durum = durum_hesapla(bitis)
+                if guncel_durum == "AKTİF" or "GÜN KALDI" in guncel_durum:
+                    bitis_tarih = datetime.datetime.strptime(bitis, "%d.%m.%Y")
+                    kalan = (bitis_tarih - datetime.datetime.now()).days
+                    aktif_listesi.append(f"🔹 {ad} - <b>{max(0, kalan)} Gün</b>")
+
+        if aktif_listesi:
+            mesaj = f"🟢 <b>GÜNCEL YETKİ LİSTESİ</b>\n📊 <b>Toplam: {len(aktif_listesi)}</b>\n\n" + "\n".join(aktif_listesi)
+            telegram_mesaj_gonder(mesaj[:4000])
+    except Exception as e:
+        print(f"Hata: {e}")
+
+# --- MAIL ---
+def gmail_tara(ilk_tarama=False):
+    try:
+        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail.login(EMAIL, PASSWORD)
+        mail.select("inbox")
+
+        arama = 'ALL' if ilk_tarama else 'UNSEEN'
+        status, data = mail.search(None, arama, 'FROM', '"eids.yetki@ticaret.gov.tr"')
+
+        mailler = data[0].split()
+        for num in mailler:
+            status, msg_data = mail.fetch(num, "(RFC822)")
+            msg = email.message_from_bytes(msg_data[0][1])
+
+            body = ""
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == "text/plain":
+                        body = part.get_payload(decode=True).decode(errors="ignore")
+            else:
+                body = msg.get_payload(decode=True).decode(errors="ignore")
+
+            tasinmaz = re.search(r"\d{6,}", body)
+            isim = re.search(r"konusunda (.*?) tarafından", body)
+            tarih = re.search(r"\d{2}\.\d{2}\.\d{4}", body)
+            bitis = "" if "iptal" in body.lower() else (tarih.group() if tarih else "")
+
+            if tasinmaz and isim:
+                t_no, ad = tasinmaz.group(), isim.group(1).strip()
+                durum = durum_hesapla(bitis)
+
+                islem = tabloya_yaz_veya_guncelle(
+                    t_no,
+                    ad,
+                    bitis,
+                    parsedate_to_datetime(msg["date"]).strftime("%d.%m.%Y %H:%M"),
+                    durum
+                )
+
+                if not ilk_tarama:
+                    telegram_mesaj_gonder(
+                        f"{ikon_belirle(durum)} <b>YETKİ {islem.upper()}</b>\n\n👤 {ad}\n🏢 No: {t_no}\n📌 Durum: {durum}"
+                    )
+
+        mail.logout()
+
+        if ilk_tarama:
+            hatirlatici_kontrol()
+
+    except Exception as e:
+        print(f"Tarama hatası: {e}")
+
+# --- KEEP ALIVE (REPLIT) ---
+from flask import Flask
+from threading import Thread
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot çalışıyor 😎"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# --- MAIN ---
+def main():
+    keep_alive()
+    print("Bot aktif 🚀")
+
+    gmail_tara(ilk_tarama=True)
+
+    schedule.every(10).minutes.do(gmail_tara, ilk_tarama=False)
+    schedule.every().day.at("09:30").do(hatirlatici_kontrol)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(10)
+
+if __name__ == "__main__":
+    main()

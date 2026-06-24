@@ -1,0 +1,18 @@
+packages:
+  "recharts": "Dashboard analytics charts and data visualization"
+  "xlsx": "Excel format spreadsheet export"
+  "framer-motion": "Page transitions and micro-interactions"
+  "clsx": "Utility for constructing className strings"
+  "tailwind-merge": "Utility for safely merging Tailwind CSS classes"
+  "@hookform/resolvers": "Zod validation resolver for React Hook Form"
+  "react-hook-form": "Form state management and validation"
+  "zod": "Schema validation for forms"
+  "jspdf": "PDF export generation"
+  "jspdf-autotable": "Table generation plugin for jsPDF"
+  "date-fns": "Date parsing and formatting utilities"
+
+images: []
+
+notes:
+  - Assumes Tailwind v4 dark mode strategy via '.dark' class on HTML root
+  - Relies on @workspace/api-client-react for all data hooks

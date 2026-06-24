@@ -1,0 +1,226 @@
+import imaplib, email, re, datetime, gspread, schedule, time, requests, os, threading
+import platform
+from email.utils import parsedate_to_datetime
+from google.oauth2.service_account import Credentials
+import telebot
+
+# --- AYARLAR ---
+EMAIL = "okuyucuali@gmail.com"
+PASSWORD = "zpej bymw wjmh ahwn"
+SHEET_NAME = "EIDS_YETKILER"
+TELEGRAM_TOKEN = "8557864996:AAHguowd-10Ktl7OIwC99Sk3ypcSOVUgsH4"
+TELEGRAM_CHAT_ID = "6642524834"
+
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
+scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+
+# --- BAĞLANTI ---
+sheet = None
+try:
+    creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+    client = gspread.authorize(creds)
+    sheet = client.open(SHEET_NAME).sheet1
+    print("✅ Google Sheets Bağlantısı Başarılı.")
+except Exception as e:
+    print(f"❌ Excel Hatası: {e}")
+
+def durum_hesapla(bitis):
+    if not bitis: return "İPTAL"
+    try:
+        bitis_tarih = datetime.datetime.strptime(bitis, "%d.%m.%Y")
+        kalan = (bitis_tarih - datetime.datetime.now()).days
+        if kalan < 0: return "SÜRE BİTTİ"
+        if 0 <= kalan <= 7: return f"{kalan} GÜN KALDI"
+        return "AKTİF"
+    except: return "HATA"
+
+def ikon_belirle(durum):
+    if "GÜN KALDI" in durum: return "🟡"
+    if durum == "AKTİF": return "🟢"
+    return "🔴"
+
+# --- SABAH BÜLTENİ ---
+def sabah_ozeti():
+    if not sheet: return
+    try:
+        veriler = sheet.get_all_values()[1:]
+        toplam_aktif = 0
+        yarın_bitenler = []
+        for s in veriler:
+            if len(s) >= 3:
+                durum = durum_hesapla(s[2])
+                if durum == "AKTİF" or "GÜN KALDI" in durum:
+                    toplam_aktif += 1
+                if "1 GÜN KALDI" in durum:
+                    yarın_bitenler.append(f"👤 {s[1]} (No: {s[0]})")
+
+        mesaj = f"☀️ <b>Günaydın Ali Can!</b> ☕\n\n🏠 Bugün <b>{toplam_aktif}</b> aktif yetkin var.\n\n"
+        if yarın_bitenler:
+            mesaj += "🚨 <b>YARIN BİTECEK YETKİLER:</b>\n" + "\n".join(yarın_bitenler)
+        else:
+            mesaj += "✅ Bugün süresi dolacak kritik yetki yok."
+        bot.send_message(TELEGRAM_CHAT_ID, mesaj, parse_mode="HTML")
+    except Exception as e:
+        print(f"Bülten Hatası: {e}")
+
+def gmail_tara(ilk_tarama=False):
+    print(f"🔍 Tarama Başladı... (Geçmiş: {ilk_tarama})")
+    try:
+        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail.login(EMAIL, PASSWORD)
+        mail.select("inbox")
+        arama = 'ALL' if ilk_tarama else 'UNSEEN'
+        status, data = mail.search(None, 'FROM', '"eids.yetki@ticaret.gov.tr"')
+        mailler = data[0].split()
+        toplam = len(mailler)
+        
+        if not sheet: return
+        
+        try:
+            mevcut_numaralar = sheet.col_values(1)
+        except:
+            print("⏳ Google API meşgul. Atlanıyor.")
+            return
+
+        eklenen = 0
+        for i, num in enumerate(mailler, 1):
+            status, msg_data = mail.fetch(num, "(RFC822)")
+            msg = email.message_from_bytes(msg_data[0][1])
+            body = ""
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() in ["text/plain", "text/html"]:
+                        body += part.get_payload(decode=True).decode(errors="ignore") + " "
+            else:
+                body = msg.get_payload(decode=True).decode(errors="ignore")
+            
+            body = re.sub(r'<[^>]+>', ' ', body)
+            body = re.sub(r'\s+', ' ', body) 
+            
+            t_no = re.search(r"\d{6,}", body)
+            isim = re.search(r"konusunda (.*?) tarafından", body)
+            tarih = re.search(r"\d{2}\.\d{2}\.\d{4}", body)
+            bitis = "" if "iptal" in body.lower() else (tarih.group() if tarih else "")
+            
+            if t_no and isim:
+                tn, ad = t_no.group(), isim.group(1).strip()
+                if tn not in mevcut_numaralar:
+                    durum = durum_hesapla(bitis)
+                    mail_tarihi = parsedate_to_datetime(msg["date"]).strftime("%d.%m.%Y %H:%M")
+                    try:
+                        sheet.append_row([tn, ad, bitis, mail_tarihi, durum])
+                        mevcut_numaralar.append(tn)
+                        eklenen += 1
+                        time.sleep(2) # Hız Koruması
+                    except Exception as sheet_err:
+                        if "429" in str(sheet_err): time.sleep(60)
+        mail.logout()
+        print(f"✅ Tarama bitti. Eklenen: {eklenen}")
+    except: pass
+
+# --- TELEGRAM KOMUTLARI ---
+@bot.message_handler(commands=['yardim', 'start', 'menu'])
+def yardim(message):
+    menu = ("☁️ <b>AYAZ EMLAK BULUT ASİSTANI</b>\n\n"
+            "👉 /guncelle - Tüm mailleri tara\n"
+            "👉 /liste - Tüm portföyü dök\n"
+            "👉 /tara - Yeni maillere bak\n"
+            "👉 /bitenler - Süresi azalanları göster\n"
+            "👉 /istatistik - Özet ver\n"
+            "👉 /sil 123456 - Kayıt sil\n\n"
+            "💻 /ping - Sistem durumu\n"
+            "📸 /ss - Ekran görüntüsü (Bulut bilgisi)\n\n"
+            "🔍 Sadece isim/no yazarak arama yapabilirsin.")
+    bot.send_message(TELEGRAM_CHAT_ID, menu, parse_mode="HTML")
+
+@bot.message_handler(commands=['guncelle'])
+def cmd_guncelle(message):
+    bot.send_message(TELEGRAM_CHAT_ID, "🔄 Geçmiş taranıyor...")
+    gmail_tara(ilk_tarama=True)
+    bot.send_message(TELEGRAM_CHAT_ID, "✅ Tamamlandı!")
+
+@bot.message_handler(commands=['tara'])
+def cmd_tara(message):
+    bot.send_message(TELEGRAM_CHAT_ID, "🔍 Yeni maillere bakılıyor...")
+    gmail_tara(ilk_tarama=False)
+
+@bot.message_handler(commands=['ping'])
+def cmd_ping(message):
+    uptime = datetime.datetime.now().strftime("%H:%M:%S")
+    bot.send_message(TELEGRAM_CHAT_ID, f"☁️ <b>Bulut Aktif</b>\nSistem: {platform.system()}\nSaat: {uptime}", parse_mode="HTML")
+
+@bot.message_handler(commands=['ss'])
+def cmd_ss(message):
+    bot.send_message(TELEGRAM_CHAT_ID, "☁️ <i>Bot şu an bulut sunucuda olduğu için fiziksel bir ekranı yok. Bu yüzden SS alamıyorum.</i>", parse_mode="HTML")
+
+@bot.message_handler(commands=['liste'])
+def cmd_liste(message):
+    try:
+        veriler = sheet.get_all_values()[1:]
+        for s in veriler:
+            if len(s)>=3:
+                bot.send_message(TELEGRAM_CHAT_ID, f"{ikon_belirle(durum_hesapla(s[2]))} <b>{s[1]}</b>\nNo: {s[0]}", parse_mode="HTML")
+                time.sleep(0.3)
+    except Exception as e:
+        if "429" in str(e): bot.send_message(TELEGRAM_CHAT_ID, "⏳ Google yavaşlamamı istedi, 1 dk bekle.")
+
+@bot.message_handler(commands=['bitenler'])
+def cmd_bitenler(message):
+    try:
+        veriler = sheet.get_all_values()[1:]
+        sayac = 0
+        for s in veriler:
+            if len(s)>=3:
+                durum = durum_hesapla(s[2])
+                if durum != "AKTİF":
+                    bot.send_message(TELEGRAM_CHAT_ID, f"{ikon_belirle(durum)} <b>{s[1]}</b>\nDurum: {durum}", parse_mode="HTML")
+                    sayac += 1
+        if sayac == 0: bot.send_message(TELEGRAM_CHAT_ID, "✅ Kritik yetki yok.")
+    except: pass
+
+@bot.message_handler(commands=['istatistik'])
+def cmd_stats(message):
+    try:
+        veriler = sheet.get_all_values()[1:]
+        aktif = sum(1 for s in veriler if len(s)>=3 and durum_hesapla(s[2]) == "AKTİF")
+        bot.send_message(TELEGRAM_CHAT_ID, f"📊 Toplam: {len(veriler)}\n🟢 Aktif: {aktif}\n🔴 Diğer: {len(veriler)-aktif}")
+    except: pass
+
+@bot.message_handler(commands=['sil'])
+def cmd_sil(message):
+    try:
+        no = message.text.split()[1]
+        tasinmazlar = sheet.col_values(1)
+        if no in tasinmazlar:
+            sheet.delete_rows(tasinmazlar.index(no) + 1)
+            bot.send_message(TELEGRAM_CHAT_ID, f"✅ {no} silindi.")
+        else:
+            bot.send_message(TELEGRAM_CHAT_ID, "❌ Bulunamadı.")
+    except: bot.send_message(TELEGRAM_CHAT_ID, "⚠️ Kullanım: /sil 12345")
+
+@bot.message_handler(func=lambda m: not m.text.startswith('/'))
+def cmd_sorgu(message):
+    metin = message.text.lower()
+    try:
+        veriler = sheet.get_all_values()[1:]
+        bulunan = [f"{ikon_belirle(durum_hesapla(s[2]))} <b>{s[1]}</b> ({s[0]})" for s in veriler if len(s)>=3 and (metin in s[0] or metin in s[1].lower())]
+        bot.send_message(TELEGRAM_CHAT_ID, "\n".join(bulunan) if bulunan else "🔍 Kayıt yok.", parse_mode="HTML")
+    except: bot.send_message(TELEGRAM_CHAT_ID, "⏳ 1 dk bekle.")
+
+def run_schedule():
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+if __name__ == "__main__":
+    print("🚀 Sistem Başlatıldı.")
+    gmail_tara(ilk_tarama=True)
+    schedule.every().day.at("09:00").do(sabah_ozeti)
+    schedule.every(10).minutes.do(gmail_tara)
+    threading.Thread(target=run_schedule, daemon=True).start()
+    
+    while True:
+        try:
+            bot.polling(none_stop=True, timeout=60)
+        except Exception as e:
+            time.sleep(5)
