@@ -17,7 +17,13 @@ scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapi
 # --- BAĞLANTI ---
 sheet = None
 try:
-    creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+    import json
+    creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if creds_json:
+        creds_dict = json.loads(creds_json)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    else:
+        creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
     client = gspread.authorize(creds)
     sheet = client.open(SHEET_NAME).sheet1
     print("✅ Google Sheets Bağlantısı Başarılı.")
