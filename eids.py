@@ -69,7 +69,7 @@ def sabah_ozeti():
     except Exception as e:
         print(f"Bülten Hatası: {e}")
 
-def gmail_tara(ilk_tarama=False):
+def gmail_tara(ilk_tarama=False, bildir=False):
     print(f"🔍 Tarama Başladı... (Geçmiş: {ilk_tarama})")
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
@@ -79,9 +79,9 @@ def gmail_tara(ilk_tarama=False):
         status, data = mail.search(None, 'FROM', '"eids.yetki@ticaret.gov.tr"')
         mailler = data[0].split()
         toplam = len(mailler)
-        
+
         if not sheet: return
-        
+
         try:
             mevcut_numaralar = sheet.col_values(1)
         except:
@@ -99,15 +99,15 @@ def gmail_tara(ilk_tarama=False):
                         body += part.get_payload(decode=True).decode(errors="ignore") + " "
             else:
                 body = msg.get_payload(decode=True).decode(errors="ignore")
-            
+
             body = re.sub(r'<[^>]+>', ' ', body)
-            body = re.sub(r'\s+', ' ', body) 
-            
+            body = re.sub(r'\s+', ' ', body)
+
             t_no = re.search(r"\d{6,}", body)
             isim = re.search(r"konusunda (.*?) tarafından", body)
             tarih = re.search(r"\d{2}\.\d{2}\.\d{4}", body)
             bitis = "" if "iptal" in body.lower() else (tarih.group() if tarih else "")
-            
+
             if t_no and isim:
                 tn, ad = t_no.group(), isim.group(1).strip()
                 if tn not in mevcut_numaralar:
@@ -117,7 +117,9 @@ def gmail_tara(ilk_tarama=False):
                         sheet.append_row([tn, ad, bitis, mail_tarihi, durum])
                         mevcut_numaralar.append(tn)
                         eklenen += 1
-                        time.sleep(2) # Hız Koruması
+                        if bildir:
+                            bot.send_message(TELEGRAM_CHAT_ID, f"🆕 <b>YENİ YETKİ</b>\n📝 {ad}\n🔢 No: {tn}\n📅 Bitiş: {bitis}\n🟢 Durum: {durum}", parse_mode="HTML")
+                        time.sleep(2)
                     except Exception as sheet_err:
                         if "429" in str(sheet_err): time.sleep(60)
         mail.logout()
@@ -220,11 +222,10 @@ def run_schedule():
 
 if __name__ == "__main__":
     print("🚀 Sistem Başlatıldı.")
-    gmail_tara(ilk_tarama=True)
+    gmail_tara(ilk_tarama=True, bildir=True)
     schedule.every().day.at("09:00").do(sabah_ozeti)
-    schedule.every(10).minutes.do(gmail_tara)
     threading.Thread(target=run_schedule, daemon=True).start()
-    
+
     while True:
         try:
             bot.polling(none_stop=True, timeout=60)
